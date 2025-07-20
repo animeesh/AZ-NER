@@ -1,34 +1,20 @@
-from typing import Literal, TypedDict
-from urllib import response
-from langgraph.types import interrupt, Command
-import uuid
-import os
-from langgraph.constants import START, END
-from langgraph.graph import StateGraph
-from langgraph.checkpoint.memory import MemorySaver
-#from google.generativeai import genai
-from openai import OpenAI
-from dotenv import load_dotenv
-#import google.generativeai as genai
+from langgraph.graph import StateGraph, START, END
+from typing_extensions import TypedDict
 
-load_dotenv()
-api_key = "apikey"
-client = OpenAI(api_key=api_key)
+from IPython.display import Image, display
 
+# Define the state structure
+# class GreetingState(TypedDict):
+#     greeting: str
 
-# Define the shared graph state
 class State(TypedDict):
-    value: dict[str, str]
-    llm_output: str
-    decision: str
+    comment: str
+    input: str
+    user_feedback: str
+    value: dict
 
-# # Simulate an LLM output node
-# def generate_llm_output(state: State) -> State:
-#     return {"llm_output": "This is the generated output."}
-
-
-
-def claim_details(state: State) -> State:
+# Define a reasoning step for the agent
+def claim_details(state: State) -> State:    
     print("claim details node")
     value = {
         "claim_id": "12345",
@@ -37,86 +23,77 @@ def claim_details(state: State) -> State:
         "claim_description": "document lost in transit",
         "claim_date": "2023-10-01"
     }
-    return {"value": value}
-
-def business_logic(state: State) -> State:
-    print(f"business logic node {state['value']}")
-    #print(f"state.type: {type(state['value'])}")
-    # claim = state["value"]
-    # # If claim is a string, convert to dict
-    # if isinstance(claim, str):
-    #     import ast
-    #     claim = ast.literal_eval(claim)
-    # risk = "high" if claim.get("claim_amount", 0) >= 100000 else "low"
-    # print(f"Risk assessment: {risk}")
-    # # Add risk to state
-    # state["risk"] = risk
-    # Here you can implement any business logic based on the claim details
-    # For simplicity, we will just return the state as is
+    print(f"Agent claim detail fetch: value: {value}")
+    
+    # Update and return new state
+    state["value"] = value
     return state
 
-def generate_llm_output(state: State) -> State:
-    print(f"Generating LLM output...")
-    response = client.responses.create(
-    model="o4-mini",
-    input=f"understand the state value {state} and generate a one line short response for the customer.")
-    print(response.output_text)
-    return {"llm_output": response.output_text}
+def business_logic(state: State) -> str:
+    print("business logic node")
+    # Here you can implement any business logic you need
+    # For example, you might want to check the claim amount or description
+    # For now, we'll just return the state unchanged
+    value = state.get("value", {})
+    print(f"Business logic processing: value: {value}")
+    claim_amount = state["value"]["claim_amount"]
+    print(claim_amount)  # Output: 1000.0
+    if claim_amount > 100:
+        return "human_decision"
+    return "approved_path" 
 
-# Human approval node
-def human_approval(state: State) -> Command[Literal["approved_path", "rejected_path"]]:
-    decision = interrupt({
-        "question": "Do you approve the following output?",
-        "claim_details": state["value"]
-    })
 
-    if decision == "approve":
-        return Command(goto="approved_path", update={"decision": "approved"})
-    else:
-        return Command(goto="rejected_path", update={"decision": "rejected"})
+# Define a preprocessing node to normalize the comment
+def human_decision_node(state: State) -> State:
+    # Transform the comment to lowercase
+    print("human decision node")
+    #state["comment"] = state["comment"].lower()
+    return state  # Return the updated state dictionary
 
-# Next steps after approval
+# Define a node for the "Hi" greeting
 def approved_node(state: State) -> State:
-    print("✅ Approved path taken.")
-    return state
+    #state["greeting"] = "Hi there, " + state["greeting"]
+    print("claim approved")
+    return state  # Return the updated state dictionary
 
-# Alternative path after rejection
+# Define a node for a standard greeting
 def rejected_node(state: State) -> State:
-    print("❌ Rejected path taken.")
-    return state
+    #state["greeting"] = "Hello, " + state["greeting"]
+    print("claim rejected")
+    return state  # Return the updated state dictionary
 
-# Build the graph
+# Define the conditional function to choose the appropriate verdict
+def choose_node(state: State) -> str:
+    # Choose the node based on whether "hi" is in the normalized greeting
+    feedback = input("Please provide feedback on the input:(approve/reject) ")
+    feedback = feedback.lower()  # Normalize the feedback to lowercase
+    return "approved_path" if "approve" in feedback else "rejected_path"
+
+# Initialize the StateGraph
 builder = StateGraph(State)
-builder.add_node("generate_llm_output", generate_llm_output)
-builder.add_node("business_logic", business_logic)
 builder.add_node("claim_details", claim_details)
-builder.add_node("human_approval", human_approval)
+builder.add_node("human_decision", human_decision_node)
 builder.add_node("approved_path", approved_node)
 builder.add_node("rejected_path", rejected_node)
 
-#builder.set_entry_point("generate_llm_output")
-#builder.add_edge("generate_llm_output", "human_approval")
+# Add the START to normalization node, then conditionally branch based on the transformed greeting
 builder.set_entry_point("claim_details")
-builder.add_edge("claim_details", "business_logic")
-builder.add_edge("business_logic", "human_approval")
-# builder.add_edge("claim_details", "human_approval")
-builder.add_edge("approved_path", "generate_llm_output")
-builder.add_edge("rejected_path", "generate_llm_output")
-builder.add_edge("generate_llm_output", END)
+#builder.add_edge("claim_details", "business_logic")
+builder.add_conditional_edges(
+    "claim_details", business_logic, ["approved_path", "human_decision"]
+)
+builder.add_conditional_edges(
+    "human_decision", choose_node, ["approved_path", "rejected_path"]
+)
+builder.add_edge("approved_path", END)
+builder.add_edge("rejected_path", END)
 
+# Compile and run the graph
+graph = builder.compile()
 
-checkpointer = MemorySaver()
-graph = builder.compile(checkpointer=checkpointer)
+#Display the graph
+display(Image(graph.get_graph().draw_mermaid_png()))
 
-# Run until interrupt
-config = {"configurable": {"thread_id": uuid.uuid4()}}
-result = graph.invoke({}, config=config)
-print(result["__interrupt__"])
-# Output:
-# Interrupt(value={'question': 'Do you approve the following output?', 'llm_output': 'This is the generated output.'}, ...)
-
-# Simulate resuming with human input
-# To test rejection, replace resume="approve" with resume="reject"
-final_result = graph.invoke(Command(resume="reject"), config=config)
-#final_result = graph.invoke({}, config=config)
-print(final_result)
+# Test with a comment containing "approve" in various forms (e.g., uppercase, mixed case)
+result = graph.invoke({})
+print(result)  
