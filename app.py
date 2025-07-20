@@ -1,19 +1,34 @@
-from langgraph.graph import StateGraph, START, END
+from langgraph.graph import StateGraph, END
 from typing_extensions import TypedDict
 
 from IPython.display import Image, display
+from langchain_openai import ChatOpenAI
+from dotenv import load_dotenv
+import os
+from langchain_core.messages import HumanMessage
 
-# Define the state structure
-# class GreetingState(TypedDict):
-#     greeting: str
+load_dotenv() 
+
+# Setting the API key
+api_key = os.getenv("OPENAI_API_KEY")
+
+llm = ChatOpenAI(
+    model="gpt-4o-mini",
+    temperature=0,
+    max_tokens=None,
+    timeout=None,
+    max_retries=2,
+    api_key=api_key,
+)
+
 
 class State(TypedDict):
     comment: str
     input: str
-    user_feedback: str
+    feedback: str
     value: dict
 
-# Define a reasoning step for the agent
+
 def claim_details(state: State) -> State:    
     print("claim details node")
     value = {
@@ -24,47 +39,42 @@ def claim_details(state: State) -> State:
         "claim_date": "2023-10-01"
     }
     print(f"Agent claim detail fetch: value: {value}")
-    
-    # Update and return new state
     state["value"] = value
     return state
 
 def business_logic(state: State) -> str:
-    print("business logic node")
-    # Here you can implement any business logic you need
-    # For example, you might want to check the claim amount or description
-    # For now, we'll just return the state unchanged
-    value = state.get("value", {})
-    print(f"Business logic processing: value: {value}")
+    print(f"Business logic processing: value")
     claim_amount = state["value"]["claim_amount"]
-    print(claim_amount)  # Output: 1000.0
+    print(claim_amount)  
     if claim_amount > 100:
         return "human_decision"
     return "approved_path" 
 
 
-# Define a preprocessing node to normalize the comment
+#HTIL connected to choose_node
 def human_decision_node(state: State) -> State:
-    # Transform the comment to lowercase
     print("human decision node")
-    #state["comment"] = state["comment"].lower()
     return state  # Return the updated state dictionary
 
-# Define a node for the "Hi" greeting
+
+#HITL Approve node
 def approved_node(state: State) -> State:
-    #state["greeting"] = "Hi there, " + state["greeting"]
+    state["feedback"] = "approved"
     print("claim approved")
-    return state  # Return the updated state dictionary
+    messages = f"Understand the following state and give a two-line response to the user: {state},give a short reson to it with the help of claim_description in state"
+    print((llm.invoke(messages).content))
+    return state  
 
-# Define a node for a standard greeting
-def rejected_node(state: State) -> State:
-    #state["greeting"] = "Hello, " + state["greeting"]
+#HITL- Reject node
+def rejected_node(state: State) -> State: 
+    state["feedback"] = "rejected"
     print("claim rejected")
-    return state  # Return the updated state dictionary
+    messages = f"Understand the following state and give a two-line response to the user: {state},give a short reson to it with the help of claim_description in state"
+    print((llm.invoke(messages).content))
+    return state  
 
 # Define the conditional function to choose the appropriate verdict
 def choose_node(state: State) -> str:
-    # Choose the node based on whether "hi" is in the normalized greeting
     feedback = input("Please provide feedback on the input:(approve/reject) ")
     feedback = feedback.lower()  # Normalize the feedback to lowercase
     return "approved_path" if "approve" in feedback else "rejected_path"
@@ -76,19 +86,11 @@ builder.add_node("human_decision", human_decision_node)
 builder.add_node("approved_path", approved_node)
 builder.add_node("rejected_path", rejected_node)
 
-# Add the START to normalization node, then conditionally branch based on the transformed greeting
 builder.set_entry_point("claim_details")
-#builder.add_edge("claim_details", "business_logic")
-builder.add_conditional_edges(
-    "claim_details", business_logic, ["approved_path", "human_decision"]
-)
-builder.add_conditional_edges(
-    "human_decision", choose_node, ["approved_path", "rejected_path"]
-)
+builder.add_conditional_edges("claim_details", business_logic, ["approved_path", "human_decision"])
+builder.add_conditional_edges("human_decision", choose_node, ["approved_path", "rejected_path"])
 builder.add_edge("approved_path", END)
 builder.add_edge("rejected_path", END)
-
-# Compile and run the graph
 graph = builder.compile()
 
 #Display the graph
